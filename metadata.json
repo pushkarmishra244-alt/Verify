@@ -1,0 +1,6 @@
+{
+  "name": "Email Verification Platform",
+  "description": "A comprehensive bulk email verifier and list cleaning platform that detects syntax errors, invalid domains, disposable/role-based addresses, and provides AI-powered deliverability insights.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
