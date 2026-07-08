@@ -205,7 +205,7 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
             onClick={() => handleExportCategory('valid')}
             disabled={validCount === 0}
             title="Download Valid & Deliverable emails in the exact input CSV format, with duplicates removed"
-            className="px-3 py-2 text-xs font-bold rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-50 disabled:text-slate-400 disabled:shadow-none text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-all active:scale-95"
+            className="px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 disabled:bg-slate-50 disabled:text-slate-400 disabled:shadow-none flex items-center gap-1.5 cursor-pointer shadow-xs transition-all active:scale-95"
           >
             <ArrowDownToLine className="w-3.5 h-3.5" />
             Download Valid CSV ({emails.filter(e => e.status === 'valid').map(e => e.email.toLowerCase()).filter((val, idx, self) => self.indexOf(val) === idx).length})
@@ -215,7 +215,7 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
             onClick={() => handleExportCategory('risky')}
             disabled={riskyCount === 0}
             title="Download Risky emails (Catch-All, Role-based) in the exact input CSV format, with duplicates removed"
-            className="px-3 py-2 text-xs font-bold rounded-xl bg-amber-500 hover:bg-amber-600 disabled:bg-slate-50 disabled:text-slate-400 disabled:shadow-none text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-all active:scale-95"
+            className="px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 disabled:bg-slate-50 disabled:text-slate-400 disabled:shadow-none flex items-center gap-1.5 cursor-pointer shadow-xs transition-all active:scale-95"
           >
             <ArrowDownToLine className="w-3.5 h-3.5" />
             Download Risky CSV ({emails.filter(e => e.status === 'risky').map(e => e.email.toLowerCase()).filter((val, idx, self) => self.indexOf(val) === idx).length})
@@ -225,7 +225,7 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
             onClick={() => handleExportCategory('invalid')}
             disabled={invalidCount === 0}
             title="Download Invalid emails (bounced, failed MX records, syntax errors) in the exact input CSV format, with duplicates removed"
-            className="px-3 py-2 text-xs font-bold rounded-xl bg-rose-600 hover:bg-rose-700 disabled:bg-slate-50 disabled:text-slate-400 disabled:shadow-none text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-all active:scale-95"
+            className="px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 disabled:bg-slate-50 disabled:text-slate-400 disabled:shadow-none flex items-center gap-1.5 cursor-pointer shadow-xs transition-all active:scale-95"
           >
             <ArrowDownToLine className="w-3.5 h-3.5" />
             Download Invalid CSV ({emails.filter(e => e.status === 'invalid').map(e => e.email.toLowerCase()).filter((val, idx, self) => self.indexOf(val) === idx).length})
