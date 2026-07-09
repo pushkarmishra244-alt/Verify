@@ -1,26 +1,87 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Mail, RefreshCw, Sparkles, FileSpreadsheet, ShieldCheck, Database, HelpCircle, Key, Info } from 'lucide-react';
+import { Mail, RefreshCw, Sparkles, FileSpreadsheet, ShieldCheck, Database, HelpCircle, Key, Info, LogOut, User } from 'lucide-react';
 import { Campaign } from './types';
 import UploadSection from './components/UploadSection';
 import DashboardStats from './components/DashboardStats';
 import CampaignList from './components/CampaignList';
 import EmailTable from './components/EmailTable';
 import MarkdownView from './components/MarkdownView';
+import Login from './components/Login';
 
 export default function App() {
+  const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('verify_safe_token'));
+  const [user, setUser] = useState<{ email: string; name: string } | null>(() => {
+    const storedUser = localStorage.getItem('verify_safe_user');
+    if (storedUser) {
+      try {
+        return JSON.parse(storedUser);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>('');
   const [aiLoading, setAiLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'grid' | 'ai'>('grid');
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [selectedCampaignIds, setSelectedCampaignIds] = useState<string[]>([]);
+  const [combinedAiInsight, setCombinedAiInsight] = useState<string>('');
+
+  const handleLoginSuccess = (token: string, userData: { email: string; name: string }) => {
+    localStorage.setItem('verify_safe_token', token);
+    localStorage.setItem('verify_safe_user', JSON.stringify(userData));
+    setAuthToken(token);
+    setUser(userData);
+  };
+
+  const handleLogout = async () => {
+    const currentToken = authToken || localStorage.getItem('verify_safe_token');
+    if (currentToken) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentToken}`
+          }
+        });
+      } catch (err) {
+        console.error('Logout API call error:', err);
+      }
+    }
+    localStorage.removeItem('verify_safe_token');
+    localStorage.removeItem('verify_safe_user');
+    setAuthToken(null);
+    setUser(null);
+    setCampaigns([]);
+  };
 
   // Load campaigns from Neon database on mount
   useEffect(() => {
+    if (!authToken) {
+      setInitialLoading(false);
+      return;
+    }
+
     async function loadInitialData() {
+      setInitialLoading(true);
       try {
-        const res = await fetch('/api/campaigns');
-        if (!res.ok) throw new Error('Failed to fetch campaigns from DB');
+        const res = await fetch('/api/campaigns', {
+          headers: {
+            'Authorization': `Bearer ${authToken}`
+          }
+        });
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            handleLogout();
+            return;
+          }
+          throw new Error('Failed to fetch campaigns from DB');
+        }
         const data = await res.json();
         setCampaigns(data);
         setSelectedCampaignId(data[0]?.id || '');
@@ -41,14 +102,44 @@ export default function App() {
       }
     }
     loadInitialData();
-  }, []);
+  }, [authToken]);
 
   // Sync user campaigns to local storage as fallback
   const syncToLocalStorage = (updatedCampaigns: Campaign[]) => {
     localStorage.setItem('email_verifier_campaigns', JSON.stringify(updatedCampaigns));
   };
 
-  const activeCampaign = campaigns.find(c => c.id === selectedCampaignId);
+  // Virtual combined campaign when in multi-select mode and at least one is selected
+  let activeCampaign: Campaign | undefined = undefined;
+  if (isMultiSelectMode && selectedCampaignIds.length > 0) {
+    const selectedCamps = campaigns.filter(c => selectedCampaignIds.includes(c.id));
+    if (selectedCamps.length > 0) {
+      const combinedEmails = selectedCamps.flatMap(c => c.emails);
+      const totalCount = combinedEmails.length;
+      const validCount = combinedEmails.filter(e => e.status === 'valid').length;
+      const invalidCount = combinedEmails.filter(e => e.status === 'invalid').length;
+      const riskyCount = combinedEmails.filter(e => e.status === 'risky').length;
+      const deliverabilityScore = totalCount > 0 ? Math.round((validCount / totalCount) * 100) : 0;
+      const combinedHeaders = Array.from(new Set(selectedCamps.flatMap(c => c.csvHeaders || []))) as string[];
+      const combinedAiSummary = selectedCamps.map(c => c.aiSummary).filter(Boolean).join('\n\n---\n\n');
+
+      activeCampaign = {
+        id: 'combined',
+        name: `Combined Report (${selectedCamps.length} Lists)`,
+        createdAt: selectedCamps[0]?.createdAt || new Date().toISOString(),
+        totalCount,
+        validCount,
+        invalidCount,
+        riskyCount,
+        emails: combinedEmails,
+        deliverabilityScore,
+        csvHeaders: combinedHeaders,
+        aiSummary: combinedAiInsight || combinedAiSummary || undefined
+      };
+    }
+  } else {
+    activeCampaign = campaigns.find(c => c.id === selectedCampaignId);
+  }
 
   // Handle a new email list verification complete
   const handleVerificationComplete = (newCampaign: Campaign) => {
@@ -63,7 +154,10 @@ export default function App() {
   const handleDeleteCampaign = async (id: string) => {
     try {
       const res = await fetch(`/api/campaigns/${id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
       });
       if (!res.ok) throw new Error('Failed to delete campaign from database');
     } catch (err) {
@@ -83,7 +177,10 @@ export default function App() {
     try {
       const res = await fetch('/api/campaigns/delete-bulk', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
         body: JSON.stringify({ ids })
       });
       if (!res.ok) throw new Error('Failed to bulk delete campaigns from database');
@@ -124,7 +221,10 @@ export default function App() {
 
       const res = await fetch('/api/campaign-insight', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
         body: JSON.stringify({ summary })
       });
 
@@ -134,16 +234,20 @@ export default function App() {
 
       const data = await res.json();
       
-      // Update campaigns state with the new AI summary
-      const updated = campaigns.map(c => {
-        if (c.id === activeCampaign.id) {
-          return { ...c, aiSummary: data.insight };
-        }
-        return c;
-      });
+      if (activeCampaign.id === 'combined') {
+        setCombinedAiInsight(data.insight);
+      } else {
+        // Update campaigns state with the new AI summary
+        const updated = campaigns.map(c => {
+          if (c.id === activeCampaign!.id) {
+            return { ...c, aiSummary: data.insight };
+          }
+          return c;
+        });
 
-      setCampaigns(updated);
-      syncToLocalStorage(updated);
+        setCampaigns(updated);
+        syncToLocalStorage(updated);
+      }
     } catch (err) {
       console.error('Error generating AI advice:', err);
     } finally {
@@ -163,6 +267,10 @@ export default function App() {
         </div>
       </div>
     );
+  }
+
+  if (!authToken) {
+    return <Login onLoginSuccess={handleLoginSuccess} />;
   }
 
   return (
@@ -188,11 +296,27 @@ export default function App() {
             <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
             <span className="text-[10px] font-bold text-slate-700">Unlimited Credits Active</span>
           </div>
+          
           <div className="h-4 w-px bg-slate-200 hidden sm:block"></div>
-          <span className="text-[10px] text-slate-400 bg-slate-100 px-2.5 py-1 rounded-lg items-center gap-1 font-semibold hidden sm:flex">
-            <Database className="w-3.5 h-3.5 text-blue-500" />
-            No-limits MX/DNS Resolver
-          </span>
+          
+          {user && (
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200/80 px-3 py-1.5 rounded-full text-slate-700">
+              <div className="w-5 h-5 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-[9px] uppercase">
+                {user.name.charAt(0)}
+              </div>
+              <span className="font-semibold text-[10px] max-w-[100px] truncate hidden md:inline">{user.name}</span>
+            </div>
+          )}
+
+          <button
+            id="btn-logout"
+            onClick={handleLogout}
+            title="Sign Out of Platform"
+            className="flex items-center gap-1.5 text-slate-500 hover:text-rose-600 font-bold hover:bg-rose-50 border border-transparent hover:border-rose-100/80 px-3 py-1.5 rounded-full transition-all duration-200 cursor-pointer text-[10px] active:scale-95"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Sign Out</span>
+          </button>
         </div>
       </nav>
 
@@ -208,7 +332,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
           >
-            <UploadSection onVerificationComplete={handleVerificationComplete} />
+            <UploadSection onVerificationComplete={handleVerificationComplete} authToken={authToken} />
           </motion.div>
 
           {/* Campaign History Log */}
@@ -221,9 +345,24 @@ export default function App() {
             <CampaignList
               campaigns={campaigns}
               selectedId={selectedCampaignId}
-              onSelectCampaign={setSelectedCampaignId}
+              onSelectCampaign={(id) => {
+                setSelectedCampaignId(id);
+                // Also select this campaign in multi-select mode as the primary choice
+                setSelectedCampaignIds([id]);
+              }}
               onDeleteCampaign={handleDeleteCampaign}
               onDeleteMultipleCampaigns={handleDeleteMultipleCampaigns}
+              isMultiSelectMode={isMultiSelectMode}
+              setIsMultiSelectMode={(mode) => {
+                setIsMultiSelectMode(mode);
+                if (mode && selectedCampaignId) {
+                  setSelectedCampaignIds([selectedCampaignId]);
+                } else {
+                  setSelectedCampaignIds([]);
+                }
+              }}
+              selectedCampaignIds={selectedCampaignIds}
+              setSelectedCampaignIds={setSelectedCampaignIds}
             />
           </motion.div>
 
@@ -375,9 +514,14 @@ export default function App() {
           ) : (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-xs flex-1 flex flex-col items-center justify-center py-20 p-6 text-center">
               <Mail className="w-12 h-12 text-slate-300 stroke-[1.5] animate-pulse mb-3" />
-              <h3 className="text-sm font-semibold text-slate-700 font-display uppercase tracking-wider">No Active Campaign</h3>
+              <h3 className="text-sm font-semibold text-slate-700 font-display uppercase tracking-wider">
+                {isMultiSelectMode ? "Select Campaigns to Combine" : "No Active Campaign"}
+              </h3>
               <p className="text-xs text-slate-400 mt-1 max-w-[280px]">
-                Verify a new list from the upload form, or choose a report from the log history to review stats.
+                {isMultiSelectMode
+                  ? "Check multiple campaigns in the history log list on the left to see combined live analytics and tables."
+                  : "Verify a new list from the upload form, or choose a report from the log history to review stats."
+                }
               </p>
             </div>
           )}

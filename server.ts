@@ -5,6 +5,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import pg from 'pg';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -26,6 +27,26 @@ const pool = new Pool({
 async function initDb() {
   const client = await pool.connect();
   try {
+    // 1. Create users table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        email VARCHAR(255) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        password_hash VARCHAR(255) NOT NULL
+      );
+    `);
+
+    // 2. Create user sessions table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_sessions (
+        token VARCHAR(255) PRIMARY KEY,
+        email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+      );
+    `);
+
+    // 3. Create campaigns and emails tables
     await client.query(`
       CREATE TABLE IF NOT EXISTS campaigns (
         id VARCHAR(100) PRIMARY KEY,
@@ -63,6 +84,24 @@ async function initDb() {
     // Ensure columns exist if the table was already created earlier
     await client.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS csv_headers TEXT;`);
     await client.query(`ALTER TABLE emails ADD COLUMN IF NOT EXISTS original_row TEXT;`);
+
+    // 4. Seed default authorized users if not exists
+    const pushkarEmail = 'pushkarmishra244@gmail.com';
+    const raviEmail = 'ravi2009u@gmail.com';
+
+    const pushkarCheck = await client.query('SELECT 1 FROM users WHERE email = $1', [pushkarEmail]);
+    if (pushkarCheck.rowCount === 0) {
+      const hash = crypto.createHash('sha256').update('Pushkar@2026').digest('hex');
+      await client.query('INSERT INTO users (email, name, password_hash) VALUES ($1, $2, $3)', [pushkarEmail, 'Pushkar Mishra', hash]);
+      console.log('Seeded default user: Pushkar Mishra');
+    }
+
+    const raviCheck = await client.query('SELECT 1 FROM users WHERE email = $1', [raviEmail]);
+    if (raviCheck.rowCount === 0) {
+      const hash = crypto.createHash('sha256').update('Ravi@2026').digest('hex');
+      await client.query('INSERT INTO users (email, name, password_hash) VALUES ($1, $2, $3)', [raviEmail, 'Ravi Ranjan', hash]);
+      console.log('Seeded default user: Ravi Ranjan');
+    }
 
     console.log('Neon database tables successfully initialized or verified.');
   } catch (err) {
@@ -266,8 +305,110 @@ async function verifyEmailList(emails: string[]): Promise<any[]> {
 
 // API Routes
 
+// Helper to authenticate session token
+async function authenticateToken(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication token required' });
+  }
+
+  try {
+    const sessionRes = await pool.query(
+      'SELECT s.email, u.name FROM user_sessions s JOIN users u ON s.email = u.email WHERE s.token = $1 AND s.expires_at > NOW()',
+      [token]
+    );
+
+    if (sessionRes.rowCount === 0) {
+      return res.status(403).json({ error: 'Session expired or invalid' });
+    }
+
+    (req as any).user = {
+      email: sessionRes.rows[0].email,
+      name: sessionRes.rows[0].name
+    };
+    next();
+  } catch (err) {
+    console.error('Error authenticating session:', err);
+    res.status(500).json({ error: 'Internal server authentication error' });
+  }
+}
+
+// Authentication endpoints
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    
+    // Strict restriction to only Pushkar Mishra & Ravi Ranjan
+    const allowedEmails = ['pushkarmishra244@gmail.com', 'ravi2009u@gmail.com'];
+    if (!allowedEmails.includes(normalizedEmail)) {
+      return res.status(403).json({ error: 'Access Denied: Only Pushkar Mishra and Ravi Ranjan are authorized to access this platform.' });
+    }
+
+    // Get user details
+    let userRes = await pool.query('SELECT * FROM users WHERE email = $1', [normalizedEmail]);
+    let name = normalizedEmail === 'pushkarmishra244@gmail.com' ? 'Pushkar Mishra' : 'Ravi Ranjan';
+    
+    if (userRes.rowCount === 0) {
+      // Create user if not exists for any reason
+      const defaultHash = crypto.createHash('sha256').update('Default@2026').digest('hex');
+      await pool.query('INSERT INTO users (email, name, password_hash) VALUES ($1, $2, $3)', [normalizedEmail, name, defaultHash]);
+      userRes = await pool.query('SELECT * FROM users WHERE email = $1', [normalizedEmail]);
+    }
+
+    const user = userRes.rows[0];
+
+    // Generate secure session token
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
+
+    await pool.query(
+      'INSERT INTO user_sessions (token, email, expires_at) VALUES ($1, $2, $3)',
+      [token, normalizedEmail, expiresAt]
+    );
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        email: user.email,
+        name: user.name
+      }
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Internal server error during login' });
+  }
+});
+
+app.get('/api/auth/me', authenticateToken, (req, res) => {
+  res.json({ authenticated: true, user: (req as any).user });
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (token) {
+    try {
+      await pool.query('DELETE FROM user_sessions WHERE token = $1', [token]);
+    } catch (err) {
+      console.error('Logout delete session error:', err);
+    }
+  }
+
+  res.json({ success: true });
+});
+
 // 0. Fetch all campaigns and their validated emails from the database
-app.get('/api/campaigns', async (req, res) => {
+app.get('/api/campaigns', authenticateToken, async (req, res) => {
   try {
     const campaignsRes = await pool.query('SELECT * FROM campaigns ORDER BY created_at DESC');
     const campaignsList = campaignsRes.rows;
@@ -309,7 +450,7 @@ app.get('/api/campaigns', async (req, res) => {
 });
 
 // 1. Bulk verify emails and save to Neon database
-app.post('/api/verify', async (req, res) => {
+app.post('/api/verify', authenticateToken, async (req, res) => {
   try {
     const { emails, name, csvHeaders } = req.body;
     if (!emails || !Array.isArray(emails)) {
@@ -423,7 +564,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 // 2. Delete a single campaign (cascades emails automatically via FOREIGN KEY REFERENCES campaigns(id) ON DELETE CASCADE)
-app.delete('/api/campaigns/:id', async (req, res) => {
+app.delete('/api/campaigns/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   try {
     await pool.query('DELETE FROM campaigns WHERE id = $1', [id]);
@@ -435,7 +576,7 @@ app.delete('/api/campaigns/:id', async (req, res) => {
 });
 
 // 3. Delete multiple campaigns in bulk (cascades emails automatically)
-app.post('/api/campaigns/delete-bulk', async (req, res) => {
+app.post('/api/campaigns/delete-bulk', authenticateToken, async (req, res) => {
   const { ids } = req.body;
   if (!ids || !Array.isArray(ids)) {
     return res.status(400).json({ error: 'Missing ids array in request body' });
@@ -450,7 +591,7 @@ app.post('/api/campaigns/delete-bulk', async (req, res) => {
 });
 
 // 4. Generate campaign AI insights with Gemini and persist them
-app.post('/api/campaign-insight', async (req, res) => {
+app.post('/api/campaign-insight', authenticateToken, async (req, res) => {
   try {
     const { summary } = req.body;
     if (!summary) {

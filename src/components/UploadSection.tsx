@@ -4,9 +4,10 @@ import { Campaign } from '../types';
 
 interface UploadSectionProps {
   onVerificationComplete: (campaign: Campaign) => void;
+  authToken: string | null;
 }
 
-export default function UploadSection({ onVerificationComplete }: UploadSectionProps) {
+export default function UploadSection({ onVerificationComplete, authToken }: UploadSectionProps) {
   const [activeTab, setActiveTab] = useState<'csv' | 'paste'>('csv');
   const [listName, setListName] = useState('');
   const [pastedEmails, setPastedEmails] = useState('');
@@ -275,7 +276,10 @@ export default function UploadSection({ onVerificationComplete }: UploadSectionP
 
         const response = await fetch('/api/verify', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}`
+          },
           body: JSON.stringify(payload),
         });
 
@@ -358,7 +362,10 @@ export default function UploadSection({ onVerificationComplete }: UploadSectionP
 
       const response = await fetch('/api/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
         body: JSON.stringify(payload),
       });
 

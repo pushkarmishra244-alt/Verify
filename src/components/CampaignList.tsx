@@ -8,6 +8,10 @@ interface CampaignListProps {
   onSelectCampaign: (id: string) => void;
   onDeleteCampaign: (id: string) => void;
   onDeleteMultipleCampaigns?: (ids: string[]) => void;
+  isMultiSelectMode: boolean;
+  setIsMultiSelectMode: (mode: boolean) => void;
+  selectedCampaignIds: string[];
+  setSelectedCampaignIds: React.Dispatch<React.SetStateAction<string[]>>;
 }
 
 export default function CampaignList({
@@ -15,14 +19,15 @@ export default function CampaignList({
   selectedId,
   onSelectCampaign,
   onDeleteCampaign,
-  onDeleteMultipleCampaigns
+  onDeleteMultipleCampaigns,
+  isMultiSelectMode,
+  setIsMultiSelectMode,
+  selectedCampaignIds,
+  setSelectedCampaignIds
 }: CampaignListProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   
-  // Multi-select state
-  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
-  const [selectedCampaignIds, setSelectedCampaignIds] = useState<string[]>([]);
   const [bulkConfirmDelete, setBulkConfirmDelete] = useState(false);
 
   const filteredCampaigns = campaigns.filter(c => 
