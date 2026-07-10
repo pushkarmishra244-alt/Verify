@@ -14,17 +14,25 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '15mb' }));
 
-// Initialize PostgreSQL client pool with Neon connection string
+// Initialize PostgreSQL client pool with Neon connection string safely
 const { Pool } = pg;
-const connectionString = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_o8CYkiKRJD2U@ep-morning-hill-atlts2yt-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  console.error('⚠️ DATABASE_URL environment variable is not defined! Please configure your secure database credentials.');
+}
 
 const pool = new Pool({
-  connectionString,
-  ssl: connectionString.includes('sslmode=require') || connectionString.includes('ssl=true') ? { rejectUnauthorized: false } : false
+  connectionString: connectionString || undefined,
+  ssl: connectionString && (connectionString.includes('sslmode=require') || connectionString.includes('ssl=true')) ? { rejectUnauthorized: false } : false
 });
 
 // Database schema initialization
 async function initDb() {
+  if (!process.env.DATABASE_URL) {
+    console.error('⚠️ Skipping database initialization: DATABASE_URL is not configured.');
+    return;
+  }
   const client = await pool.connect();
   try {
     // 1. Create users table
