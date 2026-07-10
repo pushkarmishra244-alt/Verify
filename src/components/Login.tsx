@@ -76,7 +76,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           {/* Titles */}
           <div className="text-center mb-6">
             <h2 className="text-2xl font-bold font-display text-slate-100 tracking-tight">
-              NexusFlow Terminal
+              Lead Generator
             </h2>
             <p className="mt-2 text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
               Outbound Email Marketing Console. Restricted access environment.

@@ -15,6 +15,7 @@ export interface EmailVerificationResult {
   roleBased: boolean;
   typoSuggestion?: string;
   originalRow?: string[];
+  occurrences?: number;
 }
 
 export interface Campaign {

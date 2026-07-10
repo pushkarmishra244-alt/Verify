@@ -21,134 +21,191 @@ export default function UploadSection({ onVerificationComplete, authToken }: Upl
   const [errorMessage, setErrorMessage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Smart CSV parser with automatic column detection and original data preservation
+  // Smart, highly robust CSV parser with delimiter auto-detection and column-scanning
   const parseCSVFull = (text: string): { emails: { email: string; originalRow: string[] }[]; csvHeaders: string[] } => {
-    const lines = text.split(/\r?\n/);
-    if (lines.length === 0) return { emails: [], csvHeaders: [] };
+    if (!text || !text.trim()) return { emails: [], csvHeaders: [] };
+
+    // Auto-detect delimiter by scanning the first few lines
+    const firstFewLines = text.split(/\r?\n/).slice(0, 5);
+    let delimiter = ',';
+    let commaCount = 0;
+    let semicolonCount = 0;
+    let tabCount = 0;
     
+    for (const line of firstFewLines) {
+      commaCount += (line.match(/,/g) || []).length;
+      semicolonCount += (line.match(/;/g) || []).length;
+      tabCount += (line.match(/\t/g) || []).length;
+    }
+    
+    if (semicolonCount > commaCount && semicolonCount > tabCount) {
+      delimiter = ';';
+    } else if (tabCount > commaCount && tabCount > semicolonCount) {
+      delimiter = '\t';
+    }
+
     const parsedRows: string[][] = [];
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      
-      const row: string[] = [];
-      let inQuotes = false;
-      let currentValue = '';
-      
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-          row.push(currentValue.trim());
-          currentValue = '';
+    let currentRow: string[] = [];
+    let currentValue = '';
+    let inQuotes = false;
+
+    // Standard state machine to parse CSV correctly, supporting newlines inside quotes
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const nextChar = text[i + 1];
+
+      if (char === '"') {
+        if (inQuotes && nextChar === '"') {
+          // Double quotes inside quotes is an escaped quote
+          currentValue += '"';
+          i++; // skip next quote
         } else {
-          currentValue += char;
+          // Toggle quote state
+          inQuotes = !inQuotes;
         }
+      } else if (char === delimiter && !inQuotes) {
+        currentRow.push(currentValue.trim());
+        currentValue = '';
+      } else if ((char === '\r' || char === '\n') && !inQuotes) {
+        if (char === '\r' && nextChar === '\n') {
+          i++; // skip \n
+        }
+        currentRow.push(currentValue.trim());
+        if (currentRow.length > 0 && currentRow.some(cell => cell.length > 0)) {
+          parsedRows.push(currentRow);
+        }
+        currentRow = [];
+        currentValue = '';
+      } else {
+        currentValue += char;
       }
-      row.push(currentValue.trim());
-      parsedRows.push(row);
+    }
+    
+    // Add the final cell and row if any
+    if (currentValue || currentRow.length > 0) {
+      currentRow.push(currentValue.trim());
+      if (currentRow.some(cell => cell.length > 0)) {
+        parsedRows.push(currentRow);
+      }
     }
 
     if (parsedRows.length === 0) return { emails: [], csvHeaders: [] };
 
+    // Find the email column by checking ALL rows for emails
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const maxCols = Math.max(...parsedRows.map(r => r.length));
+    const votes = new Array(maxCols).fill(0);
+
+    for (const row of parsedRows) {
+      for (let i = 0; i < row.length; i++) {
+        const val = row[i]?.replace(/["']/g, '').trim();
+        if (val && emailRegex.test(val)) {
+          votes[i]++;
+        }
+      }
+    }
+
+    // Determine the column with the most email votes
     let emailColIdx = -1;
-    const firstRow = parsedRows[0];
-    const cleanHeaders = firstRow.map(h => h.replace(/["']/g, '').trim().toLowerCase());
-    
-    // 1. Try column name matching with tiered priorities
-    const exactEmailHeaders = ['email', 'email address', 'email_address', 'e-mail', 'e-mail address', 'e-mail_address', 'mail', 'email id', 'email_id', 'emailid'];
-    for (const term of exactEmailHeaders) {
-      const idx = cleanHeaders.indexOf(term);
-      if (idx !== -1) {
-        emailColIdx = idx;
-        break;
-      }
-    }
-    
-    if (emailColIdx === -1) {
-      for (let i = 0; i < cleanHeaders.length; i++) {
-        const val = cleanHeaders[i];
-        if (val.includes('email') || val.includes('e-mail')) {
-          emailColIdx = i;
-          break;
-        }
+    let maxVotes = 0;
+    for (let i = 0; i < votes.length; i++) {
+      if (votes[i] > maxVotes) {
+        maxVotes = votes[i];
+        emailColIdx = i;
       }
     }
 
+    // Tiered fallback on column header matching if no columns had valid emails (e.g. all bad syntax or empty file)
     if (emailColIdx === -1) {
-      for (let i = 0; i < cleanHeaders.length; i++) {
-        const val = cleanHeaders[i];
-        if (val.includes('recipient') || val.includes('subscriber') || val.includes('contact')) {
-          emailColIdx = i;
-          break;
-        }
-      }
-    }
-
-    if (emailColIdx === -1) {
-      for (let i = 0; i < cleanHeaders.length; i++) {
-        const val = cleanHeaders[i];
-        if (val.includes('mail') && !val.includes('website') && !val.includes('domain') && !val.includes('url')) {
-          emailColIdx = i;
-          break;
-        }
-      }
-    }
-
-    if (emailColIdx === -1) {
-      const emailRegex = /[^\s@]+@[^\s@]+\.[^\s@]+/;
-      const rowsToCheck = parsedRows.slice(0, 10);
-      const votes = new Array(firstRow.length).fill(0);
+      const firstRow = parsedRows[0];
+      const cleanHeaders = firstRow.map(h => h.replace(/["']/g, '').trim().toLowerCase());
+      const exactEmailHeaders = ['email', 'email address', 'email_address', 'e-mail', 'e-mail address', 'e-mail_address', 'mail', 'email id', 'email_id', 'emailid'];
       
-      for (const row of rowsToCheck) {
-        for (let i = 0; i < row.length; i++) {
-          if (row[i] && emailRegex.test(row[i])) {
-            votes[i]++;
+      for (const term of exactEmailHeaders) {
+        const idx = cleanHeaders.indexOf(term);
+        if (idx !== -1) {
+          emailColIdx = idx;
+          break;
+        }
+      }
+      
+      if (emailColIdx === -1) {
+        for (let i = 0; i < cleanHeaders.length; i++) {
+          const val = cleanHeaders[i];
+          if (val.includes('email') || val.includes('e-mail')) {
+            emailColIdx = i;
+            break;
           }
         }
       }
-      
-      let maxVotes = 0;
-      for (let i = 0; i < votes.length; i++) {
-        if (votes[i] > maxVotes) {
-          maxVotes = votes[i];
-          emailColIdx = i;
+
+      if (emailColIdx === -1) {
+        for (let i = 0; i < cleanHeaders.length; i++) {
+          const val = cleanHeaders[i];
+          if (val.includes('recipient') || val.includes('subscriber') || val.includes('contact')) {
+            emailColIdx = i;
+            break;
+          }
         }
       }
     }
 
+    // Default fallback
     if (emailColIdx === -1) {
       emailColIdx = 0;
     }
 
-    const targetHeader = parsedRows[0][emailColIdx]?.toLowerCase() || '';
-    const isHeaderRow = targetHeader.includes('email') || 
-                        targetHeader.includes('mail') ||
-                        !parsedRows[0][emailColIdx]?.includes('@');
-    
+    // Determine if the first row is a header row
+    const firstRow = parsedRows[0];
+    const firstRowVal = firstRow[emailColIdx]?.replace(/["']/g, '').trim().toLowerCase() || '';
+    const isHeaderRow = firstRowVal.includes('email') || 
+                        firstRowVal.includes('mail') || 
+                        !emailRegex.test(firstRowVal);
+
     const startIdx = isHeaderRow ? 1 : 0;
-    
-    // Construct headers
-    const maxCols = Math.max(...parsedRows.map(r => r.length));
+
+    // Build headers
     const csvHeaders = isHeaderRow 
-      ? firstRow 
+      ? firstRow.map(h => h.replace(/["']/g, '').trim())
       : Array.from({ length: maxCols }, (_, i) => i === emailColIdx ? 'Email' : `Column ${i + 1}`);
 
-    const emails: { email: string; originalRow: string[] }[] = [];
-    
+    // Pre-calculate occurrences (frequencies) of each email in the parsed data
+    const emailCounts: { [email: string]: number } = {};
     for (let i = startIdx; i < parsedRows.length; i++) {
       const row = parsedRows[i];
       if (row && row[emailColIdx] !== undefined) {
         const cleanEmail = row[emailColIdx].replace(/["']/g, '').trim();
         if (cleanEmail) {
-          emails.push({
-            email: cleanEmail,
-            originalRow: row
-          });
+          const lowerEmail = cleanEmail.toLowerCase();
+          emailCounts[lowerEmail] = (emailCounts[lowerEmail] || 0) + 1;
         }
       }
     }
-    
+
+    const emails: { email: string; originalRow: string[]; occurrences: number }[] = [];
+    const seenEmails = new Set<string>();
+
+    for (let i = startIdx; i < parsedRows.length; i++) {
+      const row = parsedRows[i];
+      if (row && row[emailColIdx] !== undefined) {
+        const cleanEmail = row[emailColIdx].replace(/["']/g, '').trim();
+        if (cleanEmail) {
+          const lowerEmail = cleanEmail.toLowerCase();
+          // We only exclude EXACT duplicates (meaning identical lowercased emails)
+          if (!seenEmails.has(lowerEmail)) {
+            seenEmails.add(lowerEmail);
+            // Ensure originalRow has correct length aligned with headers
+            const alignedRow = Array.from({ length: maxCols }, (_, colIdx) => row[colIdx] !== undefined && row[colIdx] !== null ? row[colIdx] : '');
+            emails.push({
+              email: cleanEmail,
+              originalRow: alignedRow,
+              occurrences: emailCounts[lowerEmail] || 1
+            });
+          }
+        }
+      }
+    }
+
     return { emails, csvHeaders };
   };
 
@@ -413,10 +470,20 @@ export default function UploadSection({ onVerificationComplete, authToken }: Upl
         return;
       }
       
-      const emails = pastedEmails
+      const rawEmails = pastedEmails
         .split(/[\n,;\t]+/)
         .map(e => e.trim())
         .filter(e => e.length > 0 && e.includes('@'));
+      
+      const seenPasted = new Set<string>();
+      const emails: string[] = [];
+      for (const e of rawEmails) {
+        const lower = e.toLowerCase();
+        if (!seenPasted.has(lower)) {
+          seenPasted.add(lower);
+          emails.push(e);
+        }
+      }
       
       triggerVerification(emails);
     }

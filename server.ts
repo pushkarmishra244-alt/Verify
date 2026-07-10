@@ -77,13 +77,15 @@ async function initDb() {
         disposable BOOLEAN NOT NULL DEFAULT FALSE,
         role_based BOOLEAN NOT NULL DEFAULT FALSE,
         typo_suggestion TEXT,
-        original_row TEXT
+        original_row TEXT,
+        occurrences INTEGER NOT NULL DEFAULT 1
       );
     `);
 
     // Ensure columns exist if the table was already created earlier
     await client.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS csv_headers TEXT;`);
     await client.query(`ALTER TABLE emails ADD COLUMN IF NOT EXISTS original_row TEXT;`);
+    await client.query(`ALTER TABLE emails ADD COLUMN IF NOT EXISTS occurrences INTEGER DEFAULT 1;`);
 
     // 4. Seed default authorized users if not exists
     const pushkarEmail = 'pushkarmishra244@gmail.com';
@@ -437,7 +439,8 @@ app.get('/api/campaigns', authenticateToken, async (req, res) => {
           disposable: e.disposable,
           roleBased: e.role_based,
           typoSuggestion: e.typo_suggestion || undefined,
-          originalRow: e.original_row ? JSON.parse(e.original_row) : undefined
+          originalRow: e.original_row ? JSON.parse(e.original_row) : undefined,
+          occurrences: e.occurrences || 1
         }))
       });
     }
@@ -475,10 +478,11 @@ app.post('/api/verify', authenticateToken, async (req, res) => {
     console.log(`Verifying list of ${cleanEmails.length} emails for: ${campaignName}`);
     const verifiedEmails = await verifyEmailList(cleanEmails);
 
-    // Map back the originalRow to verified email objects
+    // Map back the originalRow and occurrences to verified email objects
     if (isStructured) {
       for (let i = 0; i < verifiedEmails.length; i++) {
         verifiedEmails[i].originalRow = emails[i]?.originalRow || null;
+        verifiedEmails[i].occurrences = emails[i]?.occurrences || 1;
       }
     }
 
@@ -515,8 +519,8 @@ app.post('/api/verify', authenticateToken, async (req, res) => {
 
       for (const item of verifiedEmails) {
         await client.query(`
-          INSERT INTO emails (campaign_id, email, status, score, syntax_valid, syntax_error, domain_valid, domain_has_mx, domain_error, disposable, role_based, typo_suggestion, original_row)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          INSERT INTO emails (campaign_id, email, status, score, syntax_valid, syntax_error, domain_valid, domain_has_mx, domain_error, disposable, role_based, typo_suggestion, original_row, occurrences)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         `, [
           campaignId,
           item.email,
@@ -530,7 +534,8 @@ app.post('/api/verify', authenticateToken, async (req, res) => {
           item.disposable,
           item.roleBased,
           item.typoSuggestion || null,
-          item.originalRow ? JSON.stringify(item.originalRow) : null
+          item.originalRow ? JSON.stringify(item.originalRow) : null,
+          item.occurrences || 1
         ]);
       }
 

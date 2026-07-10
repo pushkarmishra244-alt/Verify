@@ -52,12 +52,17 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
   // Helper to generate CSV content, preserving original format if available & removing duplicate emails
   const generateCSVContent = (
     items: EmailVerificationResult[], 
-    statusFilter?: 'valid' | 'risky' | 'invalid'
+    statusFilter?: 'valid' | 'risky' | 'invalid' | 'valid_risky'
   ): string => {
     // 1. Filter by status
-    let filtered = statusFilter 
-      ? items.filter(item => item.status === statusFilter)
-      : items;
+    let filtered = items;
+    if (statusFilter) {
+      if (statusFilter === 'valid_risky') {
+        filtered = items.filter(item => item.status === 'valid' || item.status === 'risky');
+      } else {
+        filtered = items.filter(item => item.status === statusFilter);
+      }
+    }
 
     // 2. Remove duplicate emails, keeping the first occurrence
     const seen = new Set<string>();
@@ -79,15 +84,16 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
 
       for (const item of deduplicated) {
         if (item.originalRow && item.originalRow.length > 0) {
-          const rowLine = item.originalRow.map(val => {
+          const rowLine = csvHeaders.map((_, colIdx) => {
+            const val = item.originalRow[colIdx];
             const valStr = val !== undefined && val !== null ? String(val) : '';
             return `"${valStr.replace(/"/g, '""')}"`;
           }).join(',');
           csvLines.push(rowLine);
         } else {
           // Fallback padding
-          const rowLine = csvHeaders.map((_, idx) => {
-            if (idx === 0) return `"${item.email.replace(/"/g, '""')}"`;
+          const rowLine = csvHeaders.map((h, idx) => {
+            if (h.toLowerCase().includes('email') || idx === 0) return `"${item.email.replace(/"/g, '""')}"`;
             return '""';
           }).join(',');
           csvLines.push(rowLine);
@@ -109,26 +115,13 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
   };
 
   // Export handlers
-  const handleExportCategory = (status: 'valid' | 'risky' | 'invalid') => {
+  const handleExportCategory = (status: 'valid' | 'risky' | 'invalid' | 'valid_risky') => {
     const csvContent = generateCSVContent(emails, status);
-    triggerDownload(csvContent, `${campaignName}_${status}_emails_deduped.csv`);
+    const fileNameSuffix = status === 'valid_risky' ? 'valid_and_risky' : status;
+    triggerDownload(csvContent, `${campaignName}_${fileNameSuffix}_emails_deduped.csv`);
   };
 
   const handleExportFullReport = () => {
-    const headers = [
-      'Email', 
-      'Status', 
-      'Deliverability Score', 
-      'Syntax Check', 
-      'Syntax Error Reason',
-      'Domain Verified', 
-      'MX Records Found', 
-      'Domain Error Reason',
-      'Disposable Provider', 
-      'Role-Based Prefix', 
-      'Typo Suggestion'
-    ];
-
     // Deduplicate the full report too
     const seen = new Set<string>();
     const deduplicated = emails.filter(item => {
@@ -138,24 +131,97 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
       return true;
     });
 
-    const rows = deduplicated.map(item => [
-      item.email,
-      item.status.toUpperCase(),
-      `${item.score}/100`,
-      item.syntax.valid ? 'VALID' : 'INVALID',
-      item.syntax.error || '',
-      item.domain.valid ? 'VALID' : 'INVALID',
-      item.domain.hasMx ? 'YES' : 'NO',
-      item.domain.error || '',
-      item.disposable ? 'YES' : 'NO',
-      item.roleBased ? 'YES' : 'NO',
-      item.typoSuggestion || ''
-    ]);
+    let csvContent = '';
 
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
-    ].join('\n');
+    if (csvHeaders && csvHeaders.length > 0) {
+      // Append our audit headers to the original headers
+      const extendedHeaders = [
+        ...csvHeaders,
+        'Verification Status',
+        'Deliverability Score',
+        'Syntax Check',
+        'Syntax Error Reason',
+        'Domain Verified',
+        'MX Records Found',
+        'Domain Error Reason',
+        'Disposable Provider',
+        'Role-Based Prefix',
+        'Typo Suggestion'
+      ];
+
+      const csvLines = [
+        extendedHeaders.map(h => `"${h.replace(/"/g, '""')}"`).join(',')
+      ];
+
+      for (const item of deduplicated) {
+        let rowValues: string[] = [];
+        if (item.originalRow && item.originalRow.length > 0) {
+          rowValues = csvHeaders.map((_, colIdx) => {
+            const val = item.originalRow[colIdx];
+            return val !== undefined && val !== null ? String(val) : '';
+          });
+        } else {
+          rowValues = csvHeaders.map((h, idx) => {
+            if (h.toLowerCase().includes('email') || idx === 0) {
+              return item.email;
+            }
+            return '';
+          });
+        }
+
+        const auditValues = [
+          item.status.toUpperCase(),
+          `${item.score}/100`,
+          item.syntax.valid ? 'VALID' : 'INVALID',
+          item.syntax.error || '',
+          item.domain.valid ? 'VALID' : 'INVALID',
+          item.domain.hasMx ? 'YES' : 'NO',
+          item.domain.error || '',
+          item.disposable ? 'YES' : 'NO',
+          item.roleBased ? 'YES' : 'NO',
+          item.typoSuggestion || ''
+        ];
+
+        const combinedRow = [...rowValues, ...auditValues];
+        const rowLine = combinedRow.map(val => `"${val.replace(/"/g, '""')}"`).join(',');
+        csvLines.push(rowLine);
+      }
+
+      csvContent = csvLines.join('\n');
+    } else {
+      const headers = [
+        'Email', 
+        'Status', 
+        'Deliverability Score', 
+        'Syntax Check', 
+        'Syntax Error Reason',
+        'Domain Verified', 
+        'MX Records Found', 
+        'Domain Error Reason',
+        'Disposable Provider', 
+        'Role-Based Prefix', 
+        'Typo Suggestion'
+      ];
+
+      const rows = deduplicated.map(item => [
+        item.email,
+        item.status.toUpperCase(),
+        `${item.score}/100`,
+        item.syntax.valid ? 'VALID' : 'INVALID',
+        item.syntax.error || '',
+        item.domain.valid ? 'VALID' : 'INVALID',
+        item.domain.hasMx ? 'YES' : 'NO',
+        item.domain.error || '',
+        item.disposable ? 'YES' : 'NO',
+        item.roleBased ? 'YES' : 'NO',
+        item.typoSuggestion || ''
+      ]);
+
+      csvContent = [
+        headers.join(','),
+        ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+      ].join('\n');
+    }
 
     triggerDownload(csvContent, `${campaignName}_full_deduped_report.csv`);
   };
@@ -219,6 +285,16 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
           >
             <ArrowDownToLine className="w-3.5 h-3.5" />
             Download Risky CSV ({emails.filter(e => e.status === 'risky').map(e => e.email.toLowerCase()).filter((val, idx, self) => self.indexOf(val) === idx).length})
+          </button>
+
+          <button
+            onClick={() => handleExportCategory('valid_risky')}
+            disabled={validCount === 0 && riskyCount === 0}
+            title="Download combined Valid & Risky emails in the exact input CSV format, with duplicates removed"
+            className="px-3 py-2 text-xs font-bold rounded-xl border border-emerald-200 text-emerald-700 bg-emerald-50/40 hover:bg-emerald-50 disabled:bg-slate-50 disabled:text-slate-400 disabled:shadow-none flex items-center gap-1.5 cursor-pointer shadow-xs transition-all active:scale-95"
+          >
+            <ArrowDownToLine className="w-3.5 h-3.5 text-emerald-600" />
+            Download Valid & Risky CSV ({emails.filter(e => e.status === 'valid' || e.status === 'risky').map(e => e.email.toLowerCase()).filter((val, idx, self) => self.indexOf(val) === idx).length})
           </button>
 
           <button
@@ -319,6 +395,7 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
           <thead>
             <tr className="bg-slate-50/70 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-slate-400">
               <th className="py-3 px-4">Email Address</th>
+              <th className="py-3 px-4 text-center">Duplicates</th>
               <th className="py-3 px-4 text-center">Score</th>
               <th className="py-3 px-4">Status</th>
               <th className="py-3 px-4">Issue Flag / Insight</th>
@@ -330,6 +407,7 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
               currentItems.map((item, index) => {
                 const globalIndex = indexOfFirstItem + index;
                 const isExpanded = expandedRow === globalIndex;
+                const duplicateCount = item.occurrences ? item.occurrences - 1 : 0;
 
                 return (
                   <React.Fragment key={globalIndex}>
@@ -348,6 +426,17 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
                             </span>
                           )}
                         </div>
+                      </td>
+
+                      {/* Duplicates Column */}
+                      <td className="py-3.5 px-4 text-center">
+                        {duplicateCount > 0 ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide bg-amber-50 text-amber-700 border border-amber-200">
+                            {duplicateCount} duplicate{duplicateCount > 1 ? 's' : ''} ({item.occurrences} total)
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 font-medium text-[10px]">None</span>
+                        )}
                       </td>
 
                       {/* Score Badge */}
@@ -431,7 +520,7 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
                     {/* Expanded details dropdown block */}
                     {isExpanded && (
                       <tr>
-                        <td colSpan={5} className="bg-slate-50/50 p-4 border-l-4 border-blue-500">
+                        <td colSpan={6} className="bg-slate-50/50 p-4 border-l-4 border-blue-500">
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                             <div>
                               <h4 className="font-semibold text-slate-800 mb-2 uppercase tracking-wider text-[10px] text-blue-600">Verification Handshakes</h4>
@@ -485,7 +574,7 @@ export default function EmailTable({ emails, campaignName, csvHeaders }: EmailTa
               })
             ) : (
               <tr>
-                <td colSpan={5} className="py-12 text-center text-slate-400">
+                <td colSpan={6} className="py-12 text-center text-slate-400">
                   <HelpCircle className="w-8 h-8 mx-auto text-slate-300 stroke-[1.5] mb-2" />
                   <p className="text-xs font-semibold">No emails match the selected filters</p>
                   <p className="text-[10px] text-slate-400">Try searching for another address or changing filter status</p>
